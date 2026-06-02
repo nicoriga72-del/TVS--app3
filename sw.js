@@ -1,5 +1,5 @@
 // TVS Ticket Service Worker — NETWORK FIRST per l'HTML (niente più cache bloccata)
-const CACHE = 'tvs-ticket-v5-1';
+const CACHE = 'tvs-ticket-v5-2';
 const STATIC = [
   'https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap',
   'https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js',

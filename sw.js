@@ -1,9 +1,9 @@
-const CACHE = 'tvs-ticket-v1';
+const CACHE = 'tvs-ticket-v2';
 const ASSETS = [
   '/',
   '/index.html',
   'https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap',
-  'https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js'
+  'https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js'
 ];
 
 self.addEventListener('install', e => {

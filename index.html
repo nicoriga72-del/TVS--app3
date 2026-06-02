@@ -579,6 +579,7 @@
   </div>
   <div class="scanner-bottom">
     <div class="scanner-target" id="scanner-target-label">SCANSIONE IN CORSO</div>
+    <button class="scanner-close" style="background:var(--azzurro);color:#001b33;border:none;margin-bottom:10px;font-weight:700;" onclick="manualEntry()">⌨ Inserimento manuale</button>
     <button class="scanner-close" onclick="closeScanner()">✕ Annulla scansione</button>
   </div>
 </div>
@@ -838,8 +839,8 @@
       <div class="card-title"><div class="icon">📤</div>Modalità Invio</div>
       <div class="toggle-row">
         <div>
-          <div class="toggle-label">Invia via Email</div>
-          <div class="toggle-sub">Email formattata al backoffice</div>
+          <div class="toggle-label">Condividi report + foto</div>
+          <div class="toggle-sub">Apre condivisione nativa (email/WhatsApp) con foto allegate</div>
         </div>
         <input type="checkbox" class="toggle" id="send-email" checked>
       </div>
@@ -881,7 +882,7 @@
   </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
 <script>
 // ============================================================
 // STATE
@@ -902,55 +903,67 @@ const state = {
 const STEPS = ['Login','Info Ticket','Soluzione','Parti','Riepilogo'];
 
 // ============================================================
-// SCAN ENGINE (using BarcodeDetector API + fallback manual)
+// SCAN ENGINE (ZXing — funziona su iOS Safari + Android, tutti i formati)
 // ============================================================
-let scannerStream = null;
+let zxingReader = null;
 let scanTarget = null;
-let barcodeDetector = null;
-let scanInterval = null;
+let scanActive = false;
 
 async function startScan(fieldId, label) {
   scanTarget = fieldId;
   document.getElementById('scanner-target-label').textContent = label;
   const overlay = document.getElementById('scanner-overlay');
   overlay.classList.add('active');
+  scanActive = true;
+
+  if (typeof ZXing === 'undefined') {
+    showToast('Libreria scanner non caricata', 'error');
+    manualEntry();
+    return;
+  }
 
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
-    });
-    scannerStream = stream;
-    const video = document.getElementById('scanner-video');
-    video.srcObject = stream;
-    await video.play();
+    // Hints: leggi TUTTI i formati (1D + 2D)
+    const hints = new Map();
+    const formats = [
+      ZXing.BarcodeFormat.CODE_128, ZXing.BarcodeFormat.CODE_39,
+      ZXing.BarcodeFormat.CODE_93, ZXing.BarcodeFormat.CODABAR,
+      ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.EAN_8,
+      ZXing.BarcodeFormat.UPC_A, ZXing.BarcodeFormat.UPC_E,
+      ZXing.BarcodeFormat.ITF, ZXing.BarcodeFormat.QR_CODE,
+      ZXing.BarcodeFormat.DATA_MATRIX, ZXing.BarcodeFormat.AZTEC,
+      ZXing.BarcodeFormat.PDF_417, ZXing.BarcodeFormat.RSS_14,
+      ZXing.BarcodeFormat.MAXICODE
+    ];
+    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, formats);
+    hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
 
-    // Try BarcodeDetector
-    if ('BarcodeDetector' in window) {
-      barcodeDetector = new BarcodeDetector({
-        formats: ['code_128','code_39','ean_13','ean_8','qr_code','data_matrix','aztec','itf','pdf417','upc_a','upc_e','codabar']
-      });
-      scanInterval = setInterval(async () => {
-        if (!video.videoWidth) return;
-        try {
-          const barcodes = await barcodeDetector.detect(video);
-          if (barcodes.length > 0) {
-            const val = barcodes[0].rawValue;
-            onScanResult(val);
-          }
-        } catch(e) {}
-      }, 400);
-    } else {
-      // Fallback: prompt manual input
-      setTimeout(() => {
-        const val = prompt('BarcodeDetector non disponibile.\nInserisci il codice manualmente:');
-        if (val) onScanResult(val);
-        else closeScanner();
-      }, 500);
-    }
+    zxingReader = new ZXing.BrowserMultiFormatReader(hints, 300);
+
+    // Seleziona camera posteriore se disponibile
+    let deviceId = undefined;
+    try {
+      const devices = await zxingReader.listVideoInputDevices();
+      const back = devices.find(d => /back|rear|environment|posteriore/i.test(d.label));
+      deviceId = back ? back.deviceId : (devices.length ? devices[devices.length - 1].deviceId : undefined);
+    } catch(e) {}
+
+    zxingReader.decodeFromVideoDevice(deviceId, 'scanner-video', (result, err) => {
+      if (result && scanActive) {
+        if (navigator.vibrate) navigator.vibrate(120);
+        onScanResult(result.getText());
+      }
+    });
   } catch(e) {
-    showToast('Fotocamera non disponibile', 'error');
-    closeScanner();
+    showToast('Fotocamera non disponibile: ' + e.message, 'error');
+    manualEntry();
   }
+}
+
+function manualEntry() {
+  const val = prompt('Inserisci il codice manualmente:');
+  if (val && val.trim()) onScanResult(val.trim());
+  else closeScanner();
 }
 
 function onScanResult(val) {
@@ -963,10 +976,14 @@ function onScanResult(val) {
 }
 
 function closeScanner() {
-  if (scanInterval) { clearInterval(scanInterval); scanInterval = null; }
-  if (scannerStream) { scannerStream.getTracks().forEach(t => t.stop()); scannerStream = null; }
+  scanActive = false;
+  if (zxingReader) {
+    try { zxingReader.reset(); } catch(e) {}
+    zxingReader = null;
+  }
   document.getElementById('scanner-overlay').classList.remove('active');
-  document.getElementById('scanner-video').srcObject = null;
+  const v = document.getElementById('scanner-video');
+  if (v.srcObject) { v.srcObject.getTracks().forEach(t => t.stop()); v.srcObject = null; }
 }
 
 // ============================================================
@@ -1236,16 +1253,7 @@ async function chiudiTicket() {
   const payload = buildPayload();
   const results = [];
 
-  if (document.getElementById('send-email').checked) {
-    const dest = document.getElementById('email-dest').value;
-    try {
-      const body = buildEmailBody(payload);
-      const mailto = `mailto:${dest}?subject=${encodeURIComponent('[TVS] Chiusura Ticket ' + state.ticket)}&body=${encodeURIComponent(body)}`;
-      window.open(mailto);
-      results.push('📧 Email aperta nel client mail');
-    } catch(e) { results.push('⚠️ Errore apertura email'); }
-  }
-
+  // 1. API call (porta TUTTO: dati + foto base64 + verbali)
   if (document.getElementById('send-api').checked) {
     const endpoint = document.getElementById('api-endpoint').value;
     const token = document.getElementById('api-token').value;
@@ -1259,26 +1267,119 @@ async function chiudiTicket() {
           },
           body: JSON.stringify(payload)
         });
-        results.push(res.ok ? '✅ API: OK (' + res.status + ')' : '⚠️ API: ' + res.status);
+        results.push(res.ok ? '✅ API: ticket inviato (' + res.status + ')' : '⚠️ API: ' + res.status);
       } catch(e) { results.push('❌ API: ' + e.message); }
+    } else {
+      results.push('⚠️ Endpoint API mancante');
     }
   }
 
-  // Always save locally
+  // 2. Condivisione nativa con FOTO allegate (Web Share — funziona iOS+Android)
+  if (document.getElementById('send-email').checked) {
+    const dest = document.getElementById('email-dest').value;
+    const body = buildEmailBody(payload);
+    const shared = await shareWithPhotos(payload, body, dest);
+    if (shared) results.push('📤 Condivisione aperta (con foto)');
+  }
+
+  // Sempre: salva localmente
   saveLocal(payload);
 
   goTo(5);
   document.getElementById('success-msg').textContent = results.join(' · ') || 'Dati salvati localmente';
+  buildSuccessActions(payload);
+}
 
-  // Email preview
+// ── Condivisione nativa con foto + verbali allegati ──
+async function shareWithPhotos(payload, body, dest) {
+  // Prepara i file (foto + verbali) come oggetti File
+  const files = [];
+  try {
+    state.photos.forEach((src, i) => {
+      const f = dataURLtoFile(src, `foto_${payload.ticket}_${i+1}.jpg`);
+      if (f) files.push(f);
+    });
+    state.verbali.forEach((v) => {
+      const f = dataURLtoFile(v.data, v.name);
+      if (f) files.push(f);
+    });
+  } catch(e) {}
+
+  // Web Share API con file (mobile)
+  if (navigator.canShare && files.length && navigator.canShare({ files })) {
+    try {
+      await navigator.share({
+        title: 'Chiusura Ticket ' + payload.ticket,
+        text: body,
+        files
+      });
+      return true;
+    } catch(e) {
+      if (e.name === 'AbortError') return false;
+    }
+  }
+
+  // Web Share senza file (solo testo)
+  if (navigator.share) {
+    try {
+      await navigator.share({ title: 'Chiusura Ticket ' + payload.ticket, text: body });
+      if (files.length) showToast('Allega le foto manualmente dalla galleria', '');
+      return true;
+    } catch(e) {
+      if (e.name === 'AbortError') return false;
+    }
+  }
+
+  // Fallback desktop: mailto (senza allegati) + avviso
+  const mailto = `mailto:${dest}?subject=${encodeURIComponent('[TVS] Chiusura Ticket ' + payload.ticket)}&body=${encodeURIComponent(body)}`;
+  window.open(mailto);
+  if (files.length) showToast('Su PC le foto vanno allegate a mano', '');
+  return true;
+}
+
+function dataURLtoFile(dataurl, filename) {
+  try {
+    const arr = dataurl.split(',');
+    const mime = arr[0].match(/:(.*?);/)[1];
+    const bstr = atob(arr[1]);
+    let n = bstr.length;
+    const u8 = new Uint8Array(n);
+    while (n--) u8[n] = bstr.charCodeAt(n);
+    return new File([u8], filename, { type: mime });
+  } catch(e) { return null; }
+}
+
+function buildSuccessActions(payload) {
   const preview = buildEmailBody(payload);
   document.getElementById('email-preview-container').innerHTML = `
-    <div style="text-align:left;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;max-height:300px;overflow-y:auto;">
-      <div style="font-size:12px;font-weight:700;color:var(--text-muted);margin-bottom:8px;">ANTEPRIMA EMAIL</div>
+    <div style="display:flex;gap:8px;margin-bottom:14px;">
+      <button class="btn btn-primary" style="flex:1;justify-content:center;" onclick="reShare()">📤 Condividi di nuovo</button>
+      <button class="btn btn-secondary" style="flex:1;justify-content:center;" onclick="downloadJSON()">💾 Scarica JSON</button>
+    </div>
+    <div style="text-align:left;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;max-height:280px;overflow-y:auto;">
+      <div style="font-size:12px;font-weight:700;color:var(--text-muted);margin-bottom:8px;">ANTEPRIMA REPORT</div>
       <pre style="font-size:11px;white-space:pre-wrap;font-family:'DM Mono',monospace;color:var(--text);">${escHtml(preview)}</pre>
     </div>
-    <button class="btn btn-primary" style="margin-top:12px;width:100%;justify-content:center;" onclick="copyEmail()">📋 Copia email</button>
+    <button class="btn btn-secondary" style="margin-top:12px;width:100%;justify-content:center;" onclick="copyEmail()">📋 Copia testo report</button>
   `;
+  window._lastPayload = payload;
+}
+
+async function reShare() {
+  const p = window._lastPayload;
+  if (p) await shareWithPhotos(p, buildEmailBody(p), document.getElementById('email-dest').value);
+}
+
+function downloadJSON() {
+  const p = window._lastPayload;
+  if (!p) return;
+  const blob = new Blob([JSON.stringify(p, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'ticket_' + p.ticket + '.json';
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 // ============================================================
@@ -1300,8 +1401,9 @@ function buildPayload() {
       note: state.noteIntervento
     },
     parti: state.parti,
+    foto: state.photos,
     nFoto: state.photos.length,
-    verbali: state.verbali.map(v => v.name),
+    verbali: state.verbali.map(v => ({ name: v.name, data: v.data })),
     timestamp: new Date().toISOString()
   };
 }
@@ -1355,7 +1457,7 @@ PARTI UTILIZZATE (${p.parti.length})
 ${sep}
 
 ALLEGATI
-${linea('Foto', p.nFoto + ' immagine/i')}${linea('Verbali', p.verbali.length ? p.verbali.join(', ') : 'nessuno')}
+${linea('Foto', p.nFoto + ' immagine/i (allegate alla condivisione)')}${linea('Verbali', p.verbali.length ? p.verbali.map(v=>v.name).join(', ') : 'nessuno')}
 ${sep}
 
 Generato da TVS Ticket App – ${p.timestamp}

@@ -601,7 +601,7 @@
   <div style="padding: 40px 20px 20px; text-align:center;">
     <div style="width:72px;height:72px;background:linear-gradient(135deg,var(--navy),var(--azzurro));border-radius:20px;margin:0 auto 20px;display:flex;align-items:center;justify-content:center;font-size:36px;box-shadow:0 8px 32px rgba(0,59,116,0.3);">🎰</div>
     <div style="font-size:22px;font-weight:700;color:var(--navy);">Chiusura Ticket</div>
-    <div style="font-size:14px;color:var(--text-muted);margin-top:6px;">Portale Tecnici TVS SCS · <b style="color:var(--azzurro)">v5.1 OCR</b></div>
+    <div style="font-size:14px;color:var(--text-muted);margin-top:6px;">Portale Tecnici TVS SCS · <b style="color:var(--azzurro)">v6.0 CMS</b></div>
   </div>
   <div class="card">
     <div class="card-title"><div class="icon">🔑</div>Accesso</div>
@@ -615,6 +615,7 @@
   </div>
   <div style="padding: 0 0 20px;">
     <button class="btn btn-primary" style="width:100%;justify-content:center;" onclick="doLogin()">Accedi →</button>
+    <button onclick="openProxyConfig()" style="width:100%;margin-top:10px;background:none;border:none;color:var(--text-muted);font-size:12px;cursor:pointer;font-family:'DM Sans',sans-serif;padding:8px;">⚙️ Configura connessione CMS</button>
   </div>
 </div>
 
@@ -1122,6 +1123,56 @@ function updateProgress(n) {
 }
 
 // ============================================================
+// FETCH DATI TICKET DAL PROXY CMS
+// ============================================================
+// Configura qui l'URL del tuo proxy dopo il deploy
+const PROXY_URL = localStorage.getItem('tvs_proxy_url') || '';
+const PROXY_KEY = localStorage.getItem('tvs_proxy_key') || '';
+
+async function fetchTicketData(ticketId) {
+  if (!PROXY_URL || !ticketId) return;
+  const toast = document.getElementById('toast');
+  showToast('⏳ Carico dati ticket...', '');
+  try {
+    const url = `${PROXY_URL.replace(/\/$/,'')}/ticket/${encodeURIComponent(ticketId)}?key=${encodeURIComponent(PROXY_KEY)}`;
+    const r = await fetch(url, { signal: AbortSignal.timeout(12000) });
+    const json = await r.json();
+    if (!json.ok) throw new Error(json.error || 'Errore proxy');
+    const d = json.data;
+
+    // Pre-compila tutti i campi
+    const set = (id, val) => { if (val) { const el = document.getElementById(id); if(el) el.value = val; }};
+    set('pdv-rice',   d.pdv?.rice);
+    set('pdv-desc',   d.pdv?.desc);
+    set('pdv-comune', d.pdv?.comune);
+    set('pdv-prov',   d.pdv?.prov?.substring(0,2).toUpperCase());
+    set('asset-code', d.asset?.code);
+    set('asset-serial', d.asset?.serial);
+    if (d.asset?.tipo) {
+      const sel = document.getElementById('asset-type');
+      const opt = Array.from(sel.options).find(o => o.value.toUpperCase() === d.asset.tipo.toUpperCase());
+      if (opt) sel.value = opt.value;
+    }
+    if (d.guasto?.descrizione) {
+      const n = document.getElementById('note-intervento');
+      if(n) n.value = 'Guasto segnalato: ' + d.guasto.descrizione;
+    }
+    showToast('✅ Dati ticket caricati!', 'success');
+  } catch(e) {
+    showToast('⚠️ Proxy non raggiungibile — compila manualmente', '');
+  }
+}
+
+// ── Configurazione proxy (salvata nel telefono) ──
+function openProxyConfig() {
+  const url = prompt('URL proxy (es. https://tvs-proxy.onrender.com):', PROXY_URL);
+  if (url !== null) { localStorage.setItem('tvs_proxy_url', url.trim()); }
+  const key = prompt('Chiave segreta:', PROXY_KEY);
+  if (key !== null) { localStorage.setItem('tvs_proxy_key', key.trim()); }
+  showToast('Config proxy salvata', 'success');
+}
+
+// ============================================================
 // LOGIN
 // ============================================================
 function doLogin() {
@@ -1136,6 +1187,8 @@ function doLogin() {
   document.getElementById('s1-user').textContent = u;
   document.getElementById('s1-datetime').textContent = state.datetime;
   goTo(1);
+  // Auto-fetch dati dal CMS
+  fetchTicketData(t);
 }
 
 // ============================================================
